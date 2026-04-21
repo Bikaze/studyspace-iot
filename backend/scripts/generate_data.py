@@ -97,22 +97,31 @@ def _generate(room_index: int, tick: int) -> dict:
         motion_count = int(np.random.randint(5, 13))  # 5–12 burst
 
     # ── Light (ADC 0–4095) ────────────────────────────────────────────────────
+    # Target lux range 300–500. Working the GL5528 formula backwards:
+    #   lux = 500 / (R_kΩ^0.7)  →  R_kΩ = (500/lux)^(1/0.7)
+    #   voltage divider: V = R_fixed*3.3 / (R_ldr+R_fixed), ADC = (V/3.3)*4095
+    # ADC ≈ 400 → ~470 lux,  ADC ≈ 550 → ~360 lux,  ADC ≈ 700 → ~300 lux
+    # Base 530 with drift ±130 keeps values centred in the 300–500 lux band.
     light_raw = (
-        2000
-        + 800 * np.sin(2 * np.pi * tick / _LIGHT_PERIOD + phase)
-        + np.random.normal(0, 50)
+        530
+        + 130 * np.sin(2 * np.pi * tick / _LIGHT_PERIOD + phase)
+        + np.random.normal(0, 20)
     )
     light_raw = int(np.clip(light_raw, 0, 4095))
 
     # ── Sound RMS ────────────────────────────────────────────────────────────
-    # Three acoustic regimes weighted by probability
+    # Target dB range: quiet ~32 dB, moderate ~50 dB, loud ~68 dB.
+    # Working the INMP441 formula backwards: rms = 420426 * 10^((dB-94)/20)
+    #   32 dB → rms ≈  420    (library silence, below 40 dB threshold)
+    #   50 dB → rms ≈ 2_650   (conversation-level, above threshold)
+    #   68 dB → rms ≈ 16_750  (loud activity spike)
     sound_regime = np.random.choice(["quiet", "moderate", "loud"], p=[0.70, 0.20, 0.10])
     if sound_regime == "quiet":
-        sound_rms = int(np.random.normal(8_000, 1_500))
+        sound_rms = int(np.random.normal(420, 100))
     elif sound_regime == "moderate":
-        sound_rms = int(np.random.normal(20_000, 3_000))
+        sound_rms = int(np.random.normal(2_650, 500))
     else:
-        sound_rms = int(np.random.normal(60_000, 10_000))
+        sound_rms = int(np.random.normal(16_750, 3_000))
     # Clamp to 24-bit INMP441 scale; negative RMS is physically impossible
     sound_rms = int(np.clip(sound_rms, 0, 400_000))
 

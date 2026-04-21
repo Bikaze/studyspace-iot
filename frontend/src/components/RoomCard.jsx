@@ -62,11 +62,16 @@ export default function RoomCard({ room }) {
 
   useEffect(() => {
     let cancelled = false;
-    getLatestReading(room.id)
-      .then(r => { if (!cancelled) setScore(r.comfort_score); })
-      .catch(() => { if (!cancelled) setScore(null); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+
+    const fetch = () => {
+      getLatestReading(room.id)
+        .then(r  => { if (!cancelled) { setScore(r.comfort_score); setLoading(false); } })
+        .catch(() => { if (!cancelled) { setScore(null);            setLoading(false); } });
+    };
+
+    fetch();
+    const interval = setInterval(fetch, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [room.id]);
 
   return (

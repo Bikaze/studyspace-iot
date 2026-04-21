@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getRoom, getLatestReading, getRoomSummary, getThresholds } from '../api/client';
+import { getRoom, getLatestReading, getRoomReadings, getRoomSummary, getThresholds } from '../api/client';
 import ComfortScore    from '../components/ComfortScore';
 import MultiLineChart  from '../components/MultiLineChart';
 import MetricCard      from '../components/MetricCard';
@@ -40,8 +40,8 @@ const STYLES = `
   .rd-section { margin-bottom: 32px; }
   .rd-metrics-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
     margin-top: 16px;
   }
   .rd-no-data {
@@ -68,13 +68,40 @@ const STYLES = `
     border-radius: 8px;
     color: var(--red);
   }
+  .rd-info {
+    margin-top: 28px;
+    padding: 18px 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .rd-info h3 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 10px;
+  }
+  .rd-info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px 24px;
+    margin-bottom: 12px;
+  }
+  .rd-info-row { display: flex; flex-direction: column; gap: 1px; }
+  .rd-info-label { font-size: 0.75rem; color: var(--accent); font-weight: 500; }
 `;
 
 const METRIC_CONFIGS = [
-  { key: 'temperature', label: 'Temperature', unit: '°C' },
-  { key: 'humidity',    label: 'Humidity',    unit: '%' },
-  { key: 'sound_db',   label: 'Sound',        unit: 'dB' },
-  { key: 'light_lux',  label: 'Light',        unit: 'lux' },
+  { key: 'temperature',       label: 'Temperature', unit: '°C'      },
+  { key: 'humidity',          label: 'Humidity',    unit: '%'       },
+  { key: 'sound_db',          label: 'Sound',       unit: 'dB'      },
+  { key: 'light_lux',         label: 'Light',       unit: 'lux'     },
+  { key: 'movements_per_min', label: 'Motion',      unit: 'mov/min' },
 ];
 
 function getStatus(metric, value, thresholds) {
@@ -109,18 +136,22 @@ export default function RoomDetail() {
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState(null);
 
-  // Initial load
+  // Initial load — fetch room meta, summary, thresholds, and seed the chart
+  // with the last 60 readings from the DB so the graph is never empty on mount
   useEffect(() => {
     (async () => {
       try {
-        const [r, s, t] = await Promise.all([
+        const [r, s, t, history] = await Promise.all([
           getRoom(room_id),
           getRoomSummary(room_id),
           getThresholds(),
+          getRoomReadings(room_id, 60),
         ]);
         setRoom(r);
         setSummary(s);
         setThresholds(t);
+        // API returns newest-first; reverse so the chart flows left→right
+        setReadings(history.slice().reverse());
       } catch (err) {
         setError(err.response?.status === 404 ? 'Room not found.' : 'Failed to load room data.');
       } finally {
@@ -192,6 +223,40 @@ export default function RoomDetail() {
           </div>
         </>
       )}
+
+      <div className="rd-info">
+        <h3>How the comfort score is calculated</h3>
+        <p style={{ marginBottom: 10 }}>
+          Each reading produces a score from 0–100. Five metrics contribute equally at 20 points each.
+          A metric scores full points when inside its ideal range and loses points proportionally as it drifts outside.
+        </p>
+        <div className="rd-info-grid">
+          <div className="rd-info-row">
+            <span className="rd-info-label">Temperature</span>
+            <span>Ideal {thresholds?.temp_min ?? 18}–{thresholds?.temp_max ?? 26} °C. Zero at ±10 °C outside range.</span>
+          </div>
+          <div className="rd-info-row">
+            <span className="rd-info-label">Humidity</span>
+            <span>Ideal {thresholds?.humidity_min ?? 30}–{thresholds?.humidity_max ?? 60} % RH. Zero at ±30 % RH outside range.</span>
+          </div>
+          <div className="rd-info-row">
+            <span className="rd-info-label">Sound</span>
+            <span>Ideal ≤ {thresholds?.sound_max_db ?? 40} dB. −2 pts per dB above threshold, zero at +10 dB over.</span>
+          </div>
+          <div className="rd-info-row">
+            <span className="rd-info-label">Light</span>
+            <span>Ideal {thresholds?.light_min_lux ?? 300}–{thresholds?.light_max_lux ?? 500} lux. Zero at ±500 lux outside range.</span>
+          </div>
+          <div className="rd-info-row">
+            <span className="rd-info-label">Motion</span>
+            <span>Ideal ≤ {thresholds?.motion_max_per_min ?? 10} mov/min. −2 pts per mov/min above threshold, zero at +10 over.</span>
+          </div>
+        </div>
+        <p>
+          Thresholds are configurable in Settings and apply immediately to the next reading.
+          Avg / Min / Max on each card are computed over the last 24 hours of stored readings.
+        </p>
+      </div>
     </>
   );
 }

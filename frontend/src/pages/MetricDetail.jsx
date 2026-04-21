@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getLatestReading, getRoomSummary, getThresholds } from '../api/client';
+import { getLatestReading, getRoomReadings, getRoomSummary, getThresholds } from '../api/client';
 import SingleMetricChart from '../components/SingleMetricChart';
 
 const STYLES = `
@@ -60,6 +60,32 @@ const STYLES = `
   .md-stat { display: flex; flex-direction: column; gap: 4px; }
   .md-stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .md-stat-value { font-size: 1.1rem; font-weight: 600; }
+  .md-info {
+    margin-top: 20px;
+    padding: 16px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 0.82rem;
+    color: var(--muted);
+    line-height: 1.75;
+  }
+  .md-info h3 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 8px;
+  }
+  .md-info code {
+    font-family: monospace;
+    font-size: 0.8rem;
+    background: var(--border);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--text);
+  }
   .spinner {
     width: 36px; height: 36px;
     border: 3px solid var(--border);
@@ -77,6 +103,45 @@ const STYLES = `
     color: var(--red);
   }
 `;
+
+const METRIC_INFO = {
+  temperature: {
+    sensor: 'DHT22',
+    conversion: 'No conversion — DHT22 outputs calibrated °C directly over its single-wire protocol.',
+    assumption: 'Valid range enforced: −40 to 80 °C. Readings outside this are rejected at ingest.',
+    threshold: (t) => `Ideal range: ${t?.temp_min ?? 18}–${t?.temp_max ?? 26} °C. Score drops to zero at ±10 °C beyond either bound.`,
+  },
+  humidity: {
+    sensor: 'DHT22',
+    conversion: 'No conversion — DHT22 outputs calibrated % RH directly alongside temperature.',
+    assumption: 'Valid range enforced: 0–100 %. Both temperature and humidity must be valid or the entire reading is discarded.',
+    threshold: (t) => `Ideal range: ${t?.humidity_min ?? 30}–${t?.humidity_max ?? 60} % RH. Score drops to zero at ±30 % RH beyond either bound.`,
+  },
+  sound_db: {
+    sensor: 'INMP441 I2S microphone',
+    conversion: 'Raw 24-bit RMS integer → dB SPL. Formula: 20 × log₁₀(rms / 420426) + 94. The constant 420426 is the nominal RMS at 94 dB SPL derived from the INMP441 sensitivity spec of −26 dBFS at 94 dB SPL.',
+    assumption: 'Assumes a single microphone capturing ambient room noise. Directional sounds close to the mic will spike the reading. The 1024-sample RMS window covers ~23 ms of audio at 44100 Hz.',
+    threshold: (t) => `Ideal: ≤ ${t?.sound_max_db ?? 40} dB. Score loses 2 pts per dB above threshold, reaching zero at ${(t?.sound_max_db ?? 40) + 10} dB.`,
+  },
+  light_lux: {
+    sensor: 'LDR GL5528 in a voltage divider',
+    conversion: 'ADC count (0–4095) → lux via two steps. (1) Recover LDR resistance: voltage = (adc / 4095) × 3.3 V, then R_ldr = (10000 × voltage) / (3.3 − voltage). (2) Apply GL5528 power law: lux = 500 / (R_kΩ)^0.7. Accuracy ±20 % across 10–1000 lux.',
+    assumption: 'Assumes a 10 kΩ fixed resistor in the divider and a 3.3 V supply. ADC saturation (count = 4095) returns 0 lux rather than an error.',
+    threshold: (t) => `Ideal range: ${t?.light_min_lux ?? 300}–${t?.light_max_lux ?? 500} lux. Score drops to zero at ±500 lux beyond either bound.`,
+  },
+  movements_per_min: {
+    sensor: 'HC-SR501 PIR',
+    conversion: 'Raw interrupt count per 5 s window → movements/min. Formula: count × 12 (there are 12 five-second windows per minute).',
+    assumption: 'Each rising edge on the PIR output is counted as one movement event. The ESP32 resets the counter atomically after each 5 s window. If the firmware send interval changes, the multiplier must be updated to match 60 / (interval_s).',
+    threshold: (t) => `Ideal: ≤ ${t?.motion_max_per_min ?? 10} mov/min. Score loses 2 pts per mov/min above threshold, reaching zero at ${(t?.motion_max_per_min ?? 10) + 10} mov/min.`,
+  },
+  comfort_score: {
+    sensor: 'Derived — all five sensors',
+    conversion: 'Not a sensor reading. Computed server-side from the five sub-scores (temperature, humidity, sound, light, motion) each worth 20 pts. Total = sum of all five sub-scores, clamped to 0–100.',
+    assumption: 'All five metrics are weighted equally. Sub-scores use linear decay outside their ideal ranges — no exponential penalty.',
+    threshold: () => '75–100 good · 50–74 moderate · 0–49 poor.',
+  },
+};
 
 const METRIC_META = {
   temperature: { label: 'Temperature', unit: '°C',     color: '#f97316' },
@@ -122,9 +187,15 @@ export default function MetricDetail() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, t] = await Promise.all([getRoomSummary(room_id), getThresholds()]);
+        const [s, t, history] = await Promise.all([
+          getRoomSummary(room_id),
+          getThresholds(),
+          getRoomReadings(room_id, 60),
+        ]);
         setSummary(s);
         setThresholds(t);
+        // API returns newest-first; reverse so the chart flows left→right
+        setReadings(history.slice().reverse());
       } catch (err) {
         setError('Failed to load data.');
       } finally {
@@ -205,6 +276,19 @@ export default function MetricDetail() {
           ))}
         </div>
       )}
+
+      {METRIC_INFO[metric] && (() => {
+        const info = METRIC_INFO[metric];
+        return (
+          <div className="md-info">
+            <h3>How this figure is produced</h3>
+            <p><strong style={{ color: 'var(--text)' }}>Sensor:</strong> {info.sensor}</p>
+            <p style={{ margin: '6px 0' }}><strong style={{ color: 'var(--text)' }}>Conversion:</strong> {info.conversion}</p>
+            <p style={{ margin: '6px 0' }}><strong style={{ color: 'var(--text)' }}>Assumption:</strong> {info.assumption}</p>
+            <p style={{ marginTop: '6px' }}><strong style={{ color: 'var(--text)' }}>Threshold:</strong> {info.threshold(thresholds)}</p>
+          </div>
+        );
+      })()}
     </>
   );
 }

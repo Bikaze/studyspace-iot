@@ -13,10 +13,11 @@ function formatTime(ts) {
 }
 
 const LINES = [
-  { key: 'temperature', label: 'Temperature', unit: '°C',  color: '#f97316', yAxis: 'left'  },
-  { key: 'humidity',    label: 'Humidity',    unit: '%',   color: '#3b82f6', yAxis: 'left'  },
-  { key: 'sound_db',   label: 'Sound',        unit: 'dB',  color: '#a855f7', yAxis: 'right' },
-  { key: 'light_lux',  label: 'Light',        unit: 'lux', color: '#eab308', yAxis: 'right' },
+  { key: 'temperature',       label: 'Temperature', unit: '°C',      color: '#f97316', yAxis: 'left'   },
+  { key: 'humidity',          label: 'Humidity',    unit: '%',        color: '#3b82f6', yAxis: 'left'   },
+  { key: 'sound_db',          label: 'Sound',       unit: 'dB',       color: '#a855f7', yAxis: 'right'  },
+  { key: 'light_lux',         label: 'Light',       unit: 'lux',      color: '#eab308', yAxis: 'right'  },
+  { key: 'movements_per_min', label: 'Motion',      unit: 'mov/min',  color: '#22c55e', yAxis: 'motion' },
 ];
 
 const CHART_STYLE = {
@@ -62,13 +63,13 @@ function CustomLegend({ payload }) {
   );
 }
 
-export default function MultiLineChart({ data = [], height = 320 }) {
+export default function MultiLineChart({ data = [], height = 420 }) {
   if (!data.length) return null;
 
   return (
     <div style={CHART_STYLE}>
       <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={data} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
+        <LineChart data={data} margin={{ top: 8, right: 20, left: 20, bottom: 0 }}>
           <CartesianGrid stroke="#2a2d3e" strokeDasharray="3 3" />
           <XAxis
             dataKey="timestamp"
@@ -80,10 +81,12 @@ export default function MultiLineChart({ data = [], height = 320 }) {
           />
           <YAxis
             yAxisId="left"
+            domain={[0, 100]}
             tick={{ fill: '#64748b', fontSize: 11 }}
             axisLine={{ stroke: '#2a2d3e' }}
             tickLine={false}
-            label={{ value: '°C / %', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11, dy: 30 }}
+            width={54}
+            label={{ value: '°C / %', angle: -90, position: 'insideRight', offset: 0, fill: '#64748b', fontSize: 11 }}
           />
           <YAxis
             yAxisId="right"
@@ -91,7 +94,17 @@ export default function MultiLineChart({ data = [], height = 320 }) {
             tick={{ fill: '#64748b', fontSize: 11 }}
             axisLine={{ stroke: '#2a2d3e' }}
             tickLine={false}
-            label={{ value: 'dB / lux', angle: 90, position: 'insideRight', fill: '#64748b', fontSize: 11, dy: -30 }}
+            width={70}
+            label={{ value: 'dB/lux', angle: -90, position: 'insideLeft', offset: 0, fill: '#64748b', fontSize: 11 }}
+          />
+          <YAxis
+            yAxisId="motion"
+            orientation="right"
+            tick={{ fill: '#22c55e', fontSize: 11 }}
+            axisLine={{ stroke: '#2a2d3e' }}
+            tickLine={false}
+            width={54}
+            label={{ value: 'mov/min', angle: -90, position: 'insideLeft', offset: 0, fill: '#22c55e', fontSize: 11 }}
           />
           <Tooltip content={<CustomTooltip />} />
           <Legend content={<CustomLegend />} />
