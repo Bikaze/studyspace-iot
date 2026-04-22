@@ -88,6 +88,7 @@ class ReadingResponse(BaseModel):
     sound_db: Optional[float]
     movements_per_min: Optional[float]
     comfort_score: Optional[float]
+    label: Optional[str]
 
 
 # ---------------------------------------------------------------------------

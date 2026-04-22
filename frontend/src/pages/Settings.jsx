@@ -333,6 +333,67 @@ export default function Settings() {
         )}
       </div>
 
+      {/* ── Sensor Calibration Reference ── */}
+      <div className="settings-section">
+        <h2>Sensor Calibration Reference</h2>
+        <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: 20, lineHeight: 1.7 }}>
+          Each sensor has a fixed hardware reference value used to convert raw readings into physical
+          units. These are determined by the sensor datasheets and circuit design — they are not
+          configurable here. They are documented so that results can be independently verified and
+          compared against a known reference.
+        </p>
+        {[
+          {
+            sensor: 'DHT22 — Temperature',
+            ref: 'Factory-calibrated. No user calibration required.',
+            formula: 'Direct °C output over single-wire protocol.',
+            accuracy: '±0.5 °C typical, ±1 °C max. Valid range: −40 to 80 °C.',
+            source: 'Aosong DHT22 datasheet, Section 5.1',
+          },
+          {
+            sensor: 'DHT22 — Humidity',
+            ref: 'Factory-calibrated. No user calibration required.',
+            formula: 'Direct % RH output alongside temperature on same wire.',
+            accuracy: '±2–5 % RH. Valid range: 0–100 % RH.',
+            source: 'Aosong DHT22 datasheet, Section 5.2',
+          },
+          {
+            sensor: 'GL5528 LDR — Light (ADC → lux)',
+            ref: 'R_fixed = 10 000 Ω (fixed resistor in voltage divider). V_supply = 3.3 V.',
+            formula: 'voltage = (ADC / 4095) × 3.3  →  R_ldr = (10000 × V) / (3.3 − V)  →  lux = 500 / (R_kΩ)^0.7',
+            accuracy: '±20 % across 10–1000 lux. GL5528 power law is empirically derived from datasheet curve.',
+            source: 'Sinosel GL5528 datasheet; Laszlo Monda, LDR Photoresistor Circuits (2019)',
+          },
+          {
+            sensor: 'INMP441 I2S Microphone — Sound (RMS → dB SPL)',
+            ref: 'Reference RMS = 420 426 counts → 94 dB SPL. Derived from INMP441 sensitivity: −26 dBFS at 94 dB SPL (1 kHz, 1 Pa), full-scale peak = 2²³ − 1 = 8 388 607.',
+            formula: 'dB_SPL = 20 × log₁₀(rms / 420426) + 94',
+            accuracy: '±3 dB SPL. Valid RMS range: 0 to 400 000 (24-bit scale clamp).',
+            source: 'InvenSense INMP441 datasheet Rev 1.3, Table 1 (Sensitivity)',
+          },
+          {
+            sensor: 'HC-SR501 PIR — Motion (count → mov/min)',
+            ref: 'Sensitivity potentiometer set to ~3 m detection radius. Re-trigger mode enabled (H-bridge jumper).',
+            formula: 'movements_per_min = motion_count × 12  (12 five-second windows per minute)',
+            accuracy: 'Binary event counter — accuracy depends on PIR sensitivity trim. Multiplier assumes exactly 5 s firmware window.',
+            source: 'HC-SR501 datasheet; firmware config.h MOTION_WINDOW_MS = 5000',
+          },
+        ].map(({ sensor, ref, formula, accuracy, source }) => (
+          <div key={sensor} style={{
+            padding: '16px 0',
+            borderBottom: '1px solid var(--border)',
+          }}>
+            <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 8 }}>{sensor}</div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.75 }}>
+              <div><span style={{ color: 'var(--accent)', fontWeight: 500 }}>Reference: </span>{ref}</div>
+              <div style={{ fontFamily: 'monospace', fontSize: '0.79rem', background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: 4, margin: '4px 0' }}>{formula}</div>
+              <div><span style={{ color: 'var(--accent)', fontWeight: 500 }}>Accuracy: </span>{accuracy}</div>
+              <div style={{ marginTop: 2, fontStyle: 'italic' }}>{source}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* ── Delete confirmation ── */}
       {confirmRoom && (
         <div className="confirm-overlay">

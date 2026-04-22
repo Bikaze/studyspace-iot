@@ -137,9 +137,9 @@ const METRIC_INFO = {
   },
   comfort_score: {
     sensor: 'Derived — all five sensors',
-    conversion: 'Not a sensor reading. Computed server-side from the five sub-scores (temperature, humidity, sound, light, motion) each worth 20 pts. Total = sum of all five sub-scores, clamped to 0–100.',
-    assumption: 'All five metrics are weighted equally. Sub-scores use linear decay outside their ideal ranges — no exponential penalty.',
-    threshold: () => '75–100 good · 50–74 moderate · 0–49 poor.',
+    conversion: 'Not a sensor reading. Computed from three components: thermal comfort (40 pts) uses apparent temperature combining temp + humidity via the Australian BOM formula; acoustic comfort (35 pts) scores sound dB with the penalty amplified up to 1.5× when motion indicates crowding; visual comfort (25 pts) scores illuminance in lux.',
+    assumption: 'Temperature and humidity are combined into apparent temperature before scoring — they cannot be evaluated independently because the body cools through evaporation, which depends on humidity. Motion modifies the acoustic penalty rather than scoring independently, because the same noise level is far more disruptive in a crowded room than an empty one.',
+    threshold: () => '75–100 comfortable · 50–74 moderate · 0–49 poor.',
   },
 };
 

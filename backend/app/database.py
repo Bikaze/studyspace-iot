@@ -6,6 +6,7 @@ here: rooms, sensor_readings, comfort_thresholds, and anomalies.
 
 import os
 from datetime import datetime, timezone
+from typing import Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import (
@@ -57,6 +58,7 @@ class SensorReading(Base):
     sound_db: Mapped[float] = mapped_column(Float, nullable=True)
     movements_per_min: Mapped[float] = mapped_column(Float, nullable=True)
     comfort_score: Mapped[float] = mapped_column(Float, nullable=True)
+    label: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class ComfortThreshold(Base):

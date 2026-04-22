@@ -4,6 +4,7 @@ import RoomList    from './pages/RoomList';
 import RoomDetail  from './pages/RoomDetail';
 import MetricDetail from './pages/MetricDetail';
 import Anomalies   from './pages/Anomalies';
+import Insights    from './pages/Insights';
 import Settings    from './pages/Settings';
 
 const NAV_STYLES = `
@@ -60,6 +61,7 @@ export default function App() {
         <div className="nav-links">
           <NavLink to="/"          className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')} end>Rooms</NavLink>
           <NavLink to="/anomalies" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>Anomalies</NavLink>
+          <NavLink to="/insights"  className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>Insights</NavLink>
           <NavLink to="/settings"  className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>Settings</NavLink>
         </div>
       </nav>
@@ -69,6 +71,7 @@ export default function App() {
           <Route path="/rooms/:room_id"                     element={<RoomDetail />} />
           <Route path="/rooms/:room_id/metrics/:metric"     element={<MetricDetail />} />
           <Route path="/anomalies"                          element={<Anomalies />} />
+          <Route path="/insights"                           element={<Insights />} />
           <Route path="/settings"                           element={<Settings />} />
         </Routes>
       </div>

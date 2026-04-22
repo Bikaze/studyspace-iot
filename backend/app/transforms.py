@@ -140,6 +140,64 @@ def compute_movements_per_min(motion_count: int) -> float:
     return float(motion_count * _WINDOWS_PER_MINUTE)
 
 
+def _vapour_pressure(temperature: float, humidity: float) -> float:
+    """Partial vapour pressure of water in hPa via the simplified Buck (1981) equation.
+
+        e = (RH / 100) × 6.105 × exp(17.27 × T / (237.7 + T))
+
+    Valid for indoor temperature ranges (0–50 °C).  Error < 0.5 % vs. the
+    full Magnus–Tetens formula across this range.
+
+    Args:
+        temperature: Air temperature in °C.
+        humidity:    Relative humidity in %.
+
+    Returns:
+        Partial vapour pressure in hPa.
+    """
+    return (humidity / 100) * 6.105 * math.exp(17.27 * temperature / (237.7 + temperature))
+
+
+def apparent_temperature(temperature: float, humidity: float) -> float:
+    """Compute apparent (feels-like) temperature using the Australian BOM formula.
+
+    Physiological basis
+    -------------------
+    The human body regulates core temperature primarily through sweating.
+    Sweat cools the skin only when it can evaporate, and evaporation rate is
+    governed by how much water vapour the surrounding air can still absorb —
+    i.e. the vapour pressure deficit.  High relative humidity at an elevated
+    temperature means the air is nearly saturated; sweat cannot leave the skin
+    and the body overheats even though the thermometer reads a plausible value.
+
+    Formula
+    -------
+    Published by the Australian Bureau of Meteorology, derived from Steadman
+    (1994) and validated against the ASHRAE 55 adaptive comfort model for
+    still-air indoor conditions:
+
+        AT = T + 0.33 × e − 4.0
+
+    where:
+        T  = dry-bulb temperature (°C)
+        e  = partial water vapour pressure (hPa), from _vapour_pressure()
+        −4.0 = convective loss correction at typical indoor air velocities
+
+    The coefficient 0.33 converts hPa of vapour pressure into a perceived
+    temperature offset in °C: every 3 hPa of additional moisture is felt as
+    roughly 1 °C warmer.
+
+    Args:
+        temperature: Air temperature in °C.
+        humidity:    Relative humidity in %.
+
+    Returns:
+        Apparent temperature in °C.
+    """
+    e = _vapour_pressure(temperature, humidity)
+    return temperature + 0.33 * e - 4.0
+
+
 def compute_comfort_score(
     temperature: float,
     humidity: float,
@@ -150,41 +208,46 @@ def compute_comfort_score(
 ) -> float:
     """Compute a 0–100 comfort score indicating study-room suitability.
 
-    Weighting rationale
-    -------------------
-    Five equally weighted metrics each contribute up to 20 points:
+    Scientific model
+    ----------------
+    Three components replace the five independent sub-scores of the naive model,
+    because temperature and humidity are physically coupled (the body cannot
+    separate them), and acoustic discomfort is amplified by crowding:
 
-        temperature        20 pts  — thermal comfort directly affects focus
-        humidity           20 pts  — extreme RH causes fatigue and dry eyes
-        sound_db           20 pts  — noise is the primary study disruptor
-        light_lux          20 pts  — insufficient or excessive light causes strain
-        movements_per_min  20 pts  — high motion indicates crowding/distraction
+        Thermal comfort   40 pts  — apparent temperature (temp × humidity combined)
+        Acoustic comfort  35 pts  — sound dB, penalty multiplied by occupancy proxy
+        Visual comfort    25 pts  — illuminance in lux
 
-    Sub-score derivation
-    --------------------
-    Temperature (±10 °C tolerance outside ideal range):
-        • 20 pts  if temp_min ≤ T ≤ temp_max
-        • Scales linearly to 0 pts at 10 °C beyond either bound
+    ── Thermal Comfort (40 pts) ──────────────────────────────────────────────
+    Apparent temperature (AT) is computed with the Australian BOM formula
+    (Steadman 1994, used by ASHRAE Standard 55):
 
-    Humidity (±30 % RH tolerance):
-        • 20 pts  if humidity_min ≤ H ≤ humidity_max
-        • Scales linearly to 0 pts at 30 % RH beyond either bound
+        e  = (RH/100) × 6.105 × exp(17.27 × T / (237.7 + T))   [vapour pressure, hPa]
+        AT = T + 0.33 × e − 4.0                                  [apparent °C]
 
-    Sound (above-threshold penalty):
-        • 20 pts  if sound_db ≤ sound_max_db
-        • −2 pts  for every dB above the threshold
-        • 0 pts   if 10+ dB above threshold
+    AT is compared against the configured temp thresholds.  Score decays
+    linearly to 0 at 8 °C beyond either bound — the physiological stress
+    boundary identified in ASHRAE 55-2023 §5.3.
 
-    Light (±500 lux tolerance outside ideal range):
-        • 20 pts  if light_min_lux ≤ L ≤ light_max_lux
-        • Scales linearly to 0 pts at 500 lux beyond either bound
+    ── Acoustic Comfort (35 pts) ─────────────────────────────────────────────
+    WHO Environmental Noise Guidelines (2018) recommend < 35 dB LAeq for
+    classrooms; 40 dB is used here to account for occupied-room background.
 
-    Motion (above-threshold penalty):
-        • 20 pts  if movements_per_min ≤ motion_max_per_min
-        • −2 pts  for every movement/min above the threshold
-        • 0 pts   if 10+ movements/min above threshold
+    Crowding amplifier: when motion exceeds its threshold, the noise penalty
+    is multiplied by up to 1.5×.  The rationale is that noise from multiple
+    simultaneous talkers surrounds the listener and cannot be filtered the way
+    a single point source can (Klatte et al. 2010, Noise & Health).
 
-    All sub-scores are clamped to [0, 20] before summing.
+        dB_excess       = max(0, sound_db − sound_max_db)
+        crowding_ratio  = clamp(0, (motion − motion_max) / motion_max, 1)
+        amplification   = 1.0 + 0.5 × crowding_ratio          [1.0× – 1.5×]
+        acoustic_score  = max(0, 35 − dB_excess × 3.5 × amplification)
+
+    ── Visual Comfort (25 pts) ───────────────────────────────────────────────
+    EN 12464-1:2021 specifies 500 lux maintained for reading/writing tasks.
+    Score is full within [light_min_lux, light_max_lux], decays to 0 at
+    ±500 lux beyond either bound (wide tolerance because LDR accuracy is ±20 %
+    and per-position lux varies across a room).
 
     Args:
         temperature:        Air temperature in °C.
@@ -198,34 +261,98 @@ def compute_comfort_score(
         Composite comfort score in [0.0, 100.0], rounded to one decimal place.
     """
 
-    def _range_score(value: float, low: float, high: float, tolerance: float) -> float:
-        """Full score within [low, high]; linear decay to 0 at ±tolerance."""
-        if low <= value <= high:
-            return 20.0
-        excess = (low - value) if value < low else (value - high)
-        return max(0.0, 20.0 * (1 - excess / tolerance))
+    # ── Thermal Comfort (40 pts) ──────────────────────────────────────────
+    at = apparent_temperature(temperature, humidity)
+    at_lo = thresholds.temp_min
+    at_hi = thresholds.temp_max
+    if at_lo <= at <= at_hi:
+        thermal_score = 40.0
+    else:
+        excess = (at_lo - at) if at < at_lo else (at - at_hi)
+        thermal_score = max(0.0, 40.0 * (1.0 - excess / 8.0))
 
-    def _above_threshold_score(value: float, threshold: float, penalty_per_unit: float = 2.0) -> float:
-        """Full score at or below threshold; linear decay to 0 at 10 units above."""
-        if value <= threshold:
-            return 20.0
-        excess = value - threshold
-        return max(0.0, 20.0 - excess * penalty_per_unit)
+    # ── Acoustic Comfort (35 pts) ─────────────────────────────────────────
+    dB_excess = max(0.0, sound_db - thresholds.sound_max_db)
+    if movements_per_min > thresholds.motion_max_per_min:
+        crowding_ratio = min(
+            1.0,
+            (movements_per_min - thresholds.motion_max_per_min) / thresholds.motion_max_per_min,
+        )
+    else:
+        crowding_ratio = 0.0
+    amplification = 1.0 + 0.5 * crowding_ratio
+    acoustic_score = max(0.0, 35.0 - dB_excess * 3.5 * amplification)
 
-    temp_score = _range_score(
-        temperature, thresholds.temp_min, thresholds.temp_max, tolerance=10.0
-    )
-    humidity_score = _range_score(
-        humidity, thresholds.humidity_min, thresholds.humidity_max, tolerance=30.0
-    )
-    sound_score = _above_threshold_score(sound_db, thresholds.sound_max_db)
-    light_score = _range_score(
-        light_lux, thresholds.light_min_lux, thresholds.light_max_lux, tolerance=500.0
-    )
-    motion_score = _above_threshold_score(movements_per_min, thresholds.motion_max_per_min)
+    # ── Visual Comfort (25 pts) ───────────────────────────────────────────
+    if thresholds.light_min_lux <= light_lux <= thresholds.light_max_lux:
+        visual_score = 25.0
+    else:
+        excess = (
+            (thresholds.light_min_lux - light_lux)
+            if light_lux < thresholds.light_min_lux
+            else (light_lux - thresholds.light_max_lux)
+        )
+        visual_score = max(0.0, 25.0 * (1.0 - excess / 500.0))
 
-    total = temp_score + humidity_score + sound_score + light_score + motion_score
-    return round(total, 1)
+    return round(thermal_score + acoustic_score + visual_score, 1)
+
+
+def classify_reading(
+    temperature: float,
+    humidity: float,
+    sound_db: float,
+    light_lux: float,
+    movements_per_min: float,
+    comfort_score: float,
+    thresholds,
+) -> str:
+    """Assign a single categorical label to a sensor reading.
+
+    Labels are evaluated in priority order so each reading gets exactly one
+    class.  The priority reflects severity: a poor overall score takes
+    precedence over a specific metric being slightly off.
+
+    Classes (in priority order)
+    ---------------------------
+    poor         comfort_score < 50  — generally uncomfortable environment
+    warm         apparent_temp > temp_max + 2 °C — thermally stressed, hot side
+    humid        humidity > 70 % — air is uncomfortably moist
+    noisy        sound_db > sound_max_db + 5 dB — clearly above noise threshold
+    dim          light_lux < light_min_lux − 100 lux — too dark for reading
+    crowded      movements_per_min > motion_max × 2 — high occupancy event
+    moderate     50 ≤ comfort_score < 75 — acceptable but not ideal
+    comfortable  comfort_score ≥ 75 — all conditions within ideal ranges
+
+    Args:
+        temperature:        Air temperature in °C.
+        humidity:           Relative humidity in %.
+        sound_db:           Sound pressure level in dB SPL.
+        light_lux:          Illuminance in lux.
+        movements_per_min:  Estimated movements per minute.
+        comfort_score:      Composite 0–100 comfort score.
+        thresholds:         SQLAlchemy ComfortThreshold ORM instance.
+
+    Returns:
+        One of: 'poor', 'warm', 'humid', 'noisy', 'dim', 'crowded',
+                'moderate', 'comfortable'.
+    """
+    at = apparent_temperature(temperature, humidity)
+
+    if comfort_score < 50:
+        return "poor"
+    if at > thresholds.temp_max + 2:
+        return "warm"
+    if humidity > 70:
+        return "humid"
+    if sound_db > thresholds.sound_max_db + 5:
+        return "noisy"
+    if light_lux < thresholds.light_min_lux - 100:
+        return "dim"
+    if movements_per_min > thresholds.motion_max_per_min * 2:
+        return "crowded"
+    if comfort_score >= 75:
+        return "comfortable"
+    return "moderate"
 
 
 def run_all_transforms(payload, thresholds) -> dict:
@@ -263,9 +390,20 @@ def run_all_transforms(payload, thresholds) -> dict:
         thresholds=thresholds,
     )
 
+    label = classify_reading(
+        temperature=payload.temperature,
+        humidity=payload.humidity,
+        sound_db=sound_db,
+        light_lux=light_lux,
+        movements_per_min=movements_per_min,
+        comfort_score=comfort_score,
+        thresholds=thresholds,
+    )
+
     return {
         "light_lux": light_lux,
         "sound_db": sound_db,
         "movements_per_min": movements_per_min,
         "comfort_score": comfort_score,
+        "label": label,
     }

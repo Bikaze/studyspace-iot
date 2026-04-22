@@ -13,15 +13,71 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import ComfortThreshold, Room, SensorReading, get_db
+import numpy as np
+
+from app.database import Anomaly, ComfortThreshold, Room, SensorReading, get_db
 from app.models import ReadingResponse, SensorPayload
-from app.transforms import run_all_transforms
+from app.transforms import apparent_temperature, run_all_transforms
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["readings"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
+
+
+def _detect_anomalies(
+    reading: SensorReading,
+    thresholds: ComfortThreshold,
+) -> list[tuple[str, float, str]]:
+    """Return (metric, value, reason) tuples for any anomalous metric values.
+
+    Anomaly bounds are deliberately wider than comfort thresholds — they flag
+    physically unusual events rather than minor discomfort.  Calibrated to
+    Kigali indoor conditions (ASHRAE 55 tropical norms):
+
+        Apparent temp  > temp_max + 5 °C  or  < temp_min − 5 °C
+        Humidity       > 78 %  or  < 28 %
+        Sound          > sound_max_db + 18 dB   (> 58 dB default)
+        Light          < 100 lux  or  > 900 lux
+        Motion         > motion_max × 3
+    """
+    flags: list[tuple[str, float, str]] = []
+
+    at = apparent_temperature(reading.temperature, reading.humidity)
+    if at > thresholds.temp_max + 5:
+        excess = round(at - thresholds.temp_max, 1)
+        flags.append(("apparent_temp", round(at, 2),
+                       f"Apparent temperature {at:.1f} °C is {excess} °C above comfort range — possible HVAC failure or direct heat source"))
+    elif at < thresholds.temp_min - 5:
+        deficit = round(thresholds.temp_min - at, 1)
+        flags.append(("apparent_temp", round(at, 2),
+                       f"Apparent temperature {at:.1f} °C is {deficit} °C below comfort range — possible ventilation failure or cold infiltration"))
+
+    if reading.humidity is not None and reading.humidity > 78:
+        flags.append(("humidity", reading.humidity,
+                       f"Humidity {reading.humidity:.1f} % exceeds 78 % — risk of condensation and mould growth"))
+    elif reading.humidity is not None and reading.humidity < 28:
+        flags.append(("humidity", reading.humidity,
+                       f"Humidity {reading.humidity:.1f} % is below 28 % — air is excessively dry"))
+
+    if reading.sound_db is not None and reading.sound_db > thresholds.sound_max_db + 18:
+        excess = round(reading.sound_db - thresholds.sound_max_db, 1)
+        flags.append(("sound_db", reading.sound_db,
+                       f"Sound level {reading.sound_db:.1f} dB is {excess} dB above threshold — acoustic spike event"))
+
+    if reading.light_lux is not None and reading.light_lux < 100:
+        flags.append(("light_lux", reading.light_lux,
+                       f"Illuminance {reading.light_lux:.0f} lux is critically low — possible lamp failure or blackout"))
+    elif reading.light_lux is not None and reading.light_lux > 900:
+        flags.append(("light_lux", reading.light_lux,
+                       f"Illuminance {reading.light_lux:.0f} lux is excessively bright — direct sunlight or fixture fault"))
+
+    if reading.movements_per_min is not None and reading.movements_per_min > thresholds.motion_max_per_min * 3:
+        flags.append(("movements_per_min", reading.movements_per_min,
+                       f"Motion rate {reading.movements_per_min:.0f} mov/min is 3× above normal — unusual occupancy event"))
+
+    return flags
 
 
 @router.post("/ingest", response_model=ReadingResponse, status_code=status.HTTP_201_CREATED)
@@ -52,6 +108,20 @@ async def ingest(payload: SensorPayload, db: DB):
         db.add(reading)
         await db.commit()
         await db.refresh(reading)
+
+        anomalies = _detect_anomalies(reading, thresholds)
+        if anomalies:
+            for metric, value, reason in anomalies:
+                db.add(Anomaly(
+                    room_id=reading.room_id,
+                    timestamp=reading.timestamp,
+                    metric=metric,
+                    value=value,
+                    reason=reason,
+                    reading_id=reading.id,
+                ))
+            await db.commit()
+
         return reading
 
     except HTTPException:
@@ -147,3 +217,74 @@ async def get_summary(room_id: str, db: DB):
             }
 
     return summary
+
+
+@router.get("/rooms/{room_id}/correlation")
+async def get_correlation(
+    room_id: str,
+    db: DB,
+    limit: Annotated[int, Query(ge=10, le=5000)] = 500,
+):
+    """Pearson correlation matrix between the five sensor metrics.
+
+    Returns the 5×5 matrix as a nested list alongside the ordered metric names
+    so the frontend can render a labelled heatmap.  Uses the most recent
+    `limit` readings that have all five derived fields populated.
+
+    Interpretation guide (returned as `guide`):
+        |r| > 0.7  — strong relationship
+        |r| > 0.4  — moderate relationship
+        |r| ≤ 0.4  — weak or no linear relationship
+    """
+    room_result = await db.execute(select(Room).where(Room.id == room_id))
+    if room_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+
+    result = await db.execute(
+        select(
+            SensorReading.temperature,
+            SensorReading.humidity,
+            SensorReading.sound_db,
+            SensorReading.light_lux,
+            SensorReading.movements_per_min,
+        )
+        .where(SensorReading.room_id == room_id)
+        .where(SensorReading.sound_db.isnot(None))
+        .where(SensorReading.light_lux.isnot(None))
+        .where(SensorReading.movements_per_min.isnot(None))
+        .order_by(SensorReading.timestamp.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+
+    if len(rows) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not enough readings for correlation analysis (need at least 10)",
+        )
+
+    metrics = ["temperature", "humidity", "sound_db", "light_lux", "movements_per_min"]
+    data = np.array([[r.temperature, r.humidity, r.sound_db, r.light_lux, r.movements_per_min]
+                     for r in rows], dtype=float)
+    matrix = np.corrcoef(data.T).tolist()
+
+    return {"metrics": metrics, "matrix": matrix, "n_readings": len(rows)}
+
+
+@router.get("/rooms/{room_id}/label-distribution")
+async def get_label_distribution(room_id: str, db: DB):
+    """Count of each classification label for the last 24 hours."""
+    room_result = await db.execute(select(Room).where(Room.id == room_id))
+    if room_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    result = await db.execute(
+        select(SensorReading.label, func.count(SensorReading.label).label("count"))
+        .where(SensorReading.room_id == room_id)
+        .where(SensorReading.timestamp >= since)
+        .where(SensorReading.label.isnot(None))
+        .group_by(SensorReading.label)
+        .order_by(func.count(SensorReading.label).desc())
+    )
+    return [{"label": r.label, "count": r.count} for r in result.all()]

@@ -71,3 +71,19 @@ export const getRoomAnomalies = async (roomId, limit = 100) => {
   });
   return res.data;
 };
+
+// Insights
+export const getCorrelation = async (roomId, limit = 500) => {
+  const res = await api.get(`/api/rooms/${roomId}/correlation`, { params: { limit } });
+  return res.data;
+};
+
+export const getLabelDistribution = async (roomId) => {
+  const res = await api.get(`/api/rooms/${roomId}/label-distribution`);
+  return res.data;
+};
+
+export const getPrediction = async (roomId) => {
+  const res = await api.get(`/api/rooms/${roomId}/predict`);
+  return res.data;
+};

@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
-from app.routes import anomalies, readings, rooms, thresholds
+from app.routes import anomalies, insights, readings, rooms, thresholds
 
 
 def _local_ip() -> str:
@@ -58,6 +58,7 @@ app.include_router(rooms.router)
 app.include_router(readings.router)
 app.include_router(thresholds.router)
 app.include_router(anomalies.router)
+app.include_router(insights.router)
 
 
 @app.get("/", tags=["health"])
