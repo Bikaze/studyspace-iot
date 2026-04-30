@@ -57,7 +57,7 @@ BACKEND_URL   = "http://localhost:8000/api/ingest"
 SEND_INTERVAL = 5   # seconds represented by each tick
 
 ROOMS = [
-    "muhabura_1r01",
+    "muhabura_p003",
 ]
 
 # ─── Kigali / UR Environmental Baselines ──────────────────────────────────────
