@@ -500,4 +500,4 @@ REACT_APP_BACKEND_URL=http://localhost:8000
 
 ---
 
-*University of Rwanda · Faculty of Engineering · 2026*
+*University of Rwanda · Department of Computer Science · 2026*
