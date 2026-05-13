@@ -227,6 +227,7 @@ export default function Insights() {
   const [prediction,  setPrediction]  = useState(null);
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   useEffect(() => {
     getRooms().then(rs => {
@@ -235,7 +236,7 @@ export default function Insights() {
     }).catch(() => {});
   }, []);
 
-  const loadData = useCallback(async (id) => {
+  const loadAll = useCallback(async (id) => {
     if (!id) return;
     setLoading(true);
     setError(null);
@@ -248,6 +249,7 @@ export default function Insights() {
       setCorr(c);
       setLabelDist(d);
       setPrediction(p);
+      setLastUpdated(new Date());
     } catch (err) {
       setError('Failed to load insights. Make sure there are enough readings in the database.');
     } finally {
@@ -255,7 +257,30 @@ export default function Insights() {
     }
   }, []);
 
-  useEffect(() => { loadData(roomId); }, [roomId, loadData]);
+  const pollLive = useCallback(async (id) => {
+    if (!id) return;
+    try {
+      const [c, p] = await Promise.all([
+        getCorrelation(id, 500),
+        getPrediction(id),
+      ]);
+      setCorr(c);
+      setPrediction(p);
+      setLastUpdated(new Date());
+    } catch {
+      // silent — don't overwrite the error banner on a background poll failure
+    }
+  }, []);
+
+  // Initial full load (includes label distribution)
+  useEffect(() => { loadAll(roomId); }, [roomId, loadAll]);
+
+  // Poll prediction + heatmap every 15 s; label distribution stays from initial load
+  useEffect(() => {
+    if (!roomId) return;
+    const interval = setInterval(() => pollLive(roomId), 15_000);
+    return () => clearInterval(interval);
+  }, [roomId, pollLive]);
 
   const distTotal = labelDist.reduce((s, r) => s + r.count, 0);
 
@@ -269,6 +294,11 @@ export default function Insights() {
         <select value={roomId} onChange={e => setRoomId(e.target.value)}>
           {rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select>
+        {lastUpdated && (
+          <span style={{ fontSize: '0.75rem', color: 'var(--muted)', marginLeft: 'auto' }}>
+            ↻ updated {lastUpdated.toLocaleTimeString()}
+          </span>
+        )}
       </div>
 
       {error && <div className="page-error">{error}</div>}
